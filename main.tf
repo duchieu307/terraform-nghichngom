@@ -10,103 +10,67 @@ terraform {
 }
 
 provider "aws" {
-  region = "ap-southeast-1"
+  region = var.region
 }
 
-variable "public_subnet_cidrs" {
-  type        = list(string)
-  description = "Public Subnet CIDR values"
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+
+module "vpc" {
+  source                 = "./modules/vpc"
+  env                    = var.env
+  project_name           = var.project_name
+  vpc_cidr_block         = var.vpc_cidr_block
+  public_subnet_numbers  = var.public_subnet_numbers
+  private_subnet_numbers = var.private_subnet_numbers
 }
 
-variable "private_subnet_cidrs" {
-  type        = list(string)
-  description = "Private Subnet CIDR values"
-  default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+module "ec2" {
+  source       = "./modules/ec2"
+  env          = var.env
+  project_name = var.project_name
+  # availability_zone  = var.availability_zone
+  ec2_ami           = var.ec2_ami
+  ec2_instance_type = var.ec2_instance_type
+  public_subnet_id  = element(module.vpc.public_subnet_ids, 0)
+  vpc_id            = module.vpc.vpc_id
+  public_key        = var.public_key
 }
 
-variable "azs" {
-  type        = list(string)
-  description = "Availability Zones"
-  default     = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c"]
+
+module "database" {
+  source                  = "./modules/database"
+  env                     = var.env
+  project_name            = var.project_name
+  availability_zone       = var.availability_zone
+  db_allocated_storage    = var.db_allocated_storage
+  db_name                 = var.db_name
+  db_engine               = var.db_engine
+  db_engine_version       = var.db_engine_version
+  db_instance_class       = var.db_instance_class
+  db_username             = var.db_username
+  db_password             = var.db_password
+  db_parameter_group_name = var.db_parameter_group_name
+  private_subnet_ids      = module.vpc.private_subnet_ids
+  vpc_id                  = module.vpc.vpc_id
+  db_port                 = var.db_port
+  ec2_sg                  = module.ec2.ec2_sg
 }
 
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
-
-  tags = {
-    Name = "Project VPC"
-  }
-}
-
-resource "aws_subnet" "public_subnets" {
-  count             = length(var.public_subnet_cidrs)
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = element(var.public_subnet_cidrs, count.index)
-  availability_zone = element(var.azs, count.index)
-
-  tags = {
-    Name = "Public Subnet ${count.index + 1}"
-  }
-}
-
-resource "aws_subnet" "private_subnets" {
-  count             = length(var.private_subnet_cidrs)
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = element(var.private_subnet_cidrs, count.index)
-  availability_zone = element(var.azs, count.index)
-
-  tags = {
-    Name = "Private Subnet ${count.index + 1}"
-  }
-}
-
-resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "Project VPC IG"
-  }
-}
-
-resource "aws_route_table" "second_rt" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.gw.id
-  }
-
-  tags = {
-    Name = "2nd Route Table"
-  }
-}
-
-resource "aws_route_table_association" "public_subnet_asso" {
-  count          = length(var.public_subnet_cidrs)
-  subnet_id      = element(aws_subnet.public_subnets[*].id, count.index)
-  route_table_id = aws_route_table.second_rt.id
-}
-
-resource "aws_lb" "alb" {
-  name               = "hieuvu-alb"
-  internal           = false
-  load_balancer_type = "application"
-  # security_groups    = [aws_security_group.lb_sg.id]
-  subnets = [for subnet in aws_subnet.public_subnets : subnet.id]
-
+module "elastic-cache" {
+  source                     = "./modules/elastic-cache"
+  availability_zone          = var.availability_zone
+  env                        = var.env
+  project_name               = var.project_name
+  cache_cluster_id           = var.cache_cluster_id
+  cache_num_cache_nodes      = var.cache_num_cache_nodes
+  cache_engine               = var.cache_engine
+  cache_node_type            = var.cache_node_type
+  cache_parameter_group_name = var.cache_parameter_group_name
+  cache_engine_version       = var.cache_engine_version
+  cache_port                 = var.cache_port
+  private_subnet_ids         = module.vpc.private_subnet_ids
+  vpc_id                     = module.vpc.vpc_id
+  ec2_sg                     = module.ec2.ec2_sg
 
 }
 
 
-resource "aws_instance" "ec2-instances" {
-  count             = length(var.azs)
-  ami               = "ami-0acb5e61d5d7b19c8"
-  instance_type     = "t2.micro"
-  availability_zone = element(var.azs, count.index)
-  subnet_id         = element(aws_subnet.public_subnets[*].id, count.index)
-
-  tags = {
-    Name = "Instance ${element(var.azs, count.index)}"
-  }
-}
